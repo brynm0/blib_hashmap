@@ -118,6 +118,10 @@ static void run_unordered_map_tests(u32 *keys, len_string *vals, u32 count)
         }
     }
 
+    for (int i = 0; i < count; i++)
+    {
+        len_string ret = h[keys[i]]; //(key);
+    }
     // auto end = current_time();
     // auto us_elapsed = microseconds_elapsed(start, end);
     // fprintf(stderr, "unordered_map:\nMemory: %d elements\nTime: %.2fus\n\n",
@@ -184,9 +188,9 @@ int main(int argc, char **argv)
     u32 test_count = 25000000; // (u32)pow(2, 16);
     u32 *keys = (u32 *)malloc(sizeof(u32) * test_count);
     len_string *vals = (len_string *)malloc(sizeof(len_string) * test_count);
+    srand(1);
     for (int i = 0; i < test_count; i++)
     {
-        srand(1);
         keys[i] = (u32)rand();
         char buf[64];
         itoa(i, buf, 10);
@@ -210,12 +214,20 @@ int main(int argc, char **argv)
 
         for (int i = 0; i < test_count; i++)
         {
-
-            h_result ins_result = hashmap_insert_u32_len_string(&h, keys[i], vals[i]);
-            if (ins_result == NO_ERROR)
+            len_string ret = {};
+            if (h_retrieve_u32_len_string(&h, keys[i], &ret) != NO_ERROR)
             {
-                actual_num_inputs++;
+                h_result ins_result = hashmap_insert_u32_len_string(&h, keys[i], vals[i]);
+                if (ins_result == NO_ERROR)
+                {
+                    actual_num_inputs++;
+                }
             }
+        }
+        for (int i = 0; i < test_count; i++)
+        {
+            len_string ret;
+            h_retrieve_u32_len_string(&h, keys[i], &ret);
         }
         h_free_u32_len_string(&h);
     }
@@ -223,15 +235,15 @@ int main(int argc, char **argv)
     auto us_elapsed = microseconds_elapsed(start, end);
     fprintf(stdout, "h_map time: %.3fs\n", (float)us_elapsed.count() / 1000000.0f);
 
-    // start = current_time();
-    // for (int i = 0; i < num_test_iter; i++)
-    // {
-    //     fprintf(stdout, "std::unordered_map: %d / %d\r", i, num_test_iter);
-    //     run_unordered_map_tests(keys, vals, test_count);
-    // }
-    // end = current_time();
-    // us_elapsed = microseconds_elapsed(start, end);
-    // fprintf(stdout, "std::unordered_map time: %.3fs\n", (float)us_elapsed.count() / 1000000.0f);
+    start = current_time();
+    for (int i = 0; i < num_test_iter; i++)
+    {
+        fprintf(stdout, "std::unordered_map: %d / %d\r", i, num_test_iter);
+        run_unordered_map_tests(keys, vals, test_count);
+    }
+    end = current_time();
+    us_elapsed = microseconds_elapsed(start, end);
+    fprintf(stdout, "std::unordered_map time: %.3fs\n", (float)us_elapsed.count() / 1000000.0f);
 
     // run_occupancy_benchmark(N_TESTS_X, N_TESTS_Y);
     return 0;

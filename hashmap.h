@@ -98,255 +98,251 @@ static inline h_u64 power_2_mod(h_u64 a, h_u64 b)
 #define HASH_EQUALS(name, type) h_bool name(type *a, type *b)
 
 // TODO handle tie-breakers. Currently we just move on, but this isn't optimal (i think)
-#define HASHMAP_INIT(name, key_type, val_type, __hash_func, __equals_func)                                     \
-    typedef HASH_FUNCTION(h_hashfunc_##name, key_type);                                                        \
-    typedef HASH_EQUALS(h_equalfunc_##name, key_type);                                                         \
-    struct bucket_##name                                                                                       \
-    {                                                                                                          \
-        h_bool full;                                                                                           \
-        h_u32 psl;                                                                                             \
-        key_type key;                                                                                          \
-        val_type val;                                                                                          \
-    };                                                                                                         \
-                                                                                                               \
-    static inline h_result fill_bucket_##name(bucket_##name *bucket, key_type key, val_type val)               \
-    {                                                                                                          \
-        H_ASSERT(!bucket->full, "Cannot fill an already full bucket");                                         \
-        bucket->full = true;                                                                                   \
-        bucket->psl = 0;                                                                                       \
-        bucket->key = key;                                                                                     \
-        bucket->val = val;                                                                                     \
-        return NO_ERROR;                                                                                       \
-    }                                                                                                          \
-                                                                                                               \
-    struct h_map_##name                                                                                        \
-    {                                                                                                          \
-        h_u32 n_buckets;                                                                                       \
-        h_u32 max_psl;                                                                                         \
-        h_u32 buckets_used;                                                                                    \
-        bucket_##name *buckets;                                                                                \
-        h_hashfunc_##name *hash_func;                                                                          \
-        h_equalfunc_##name *equal_func;                                                                        \
-    };                                                                                                         \
-                                                                                                               \
-    static inline h_map_##name h_init_##name(h_u32 capacity = HASHMAP_INITIAL_CAPACITY)                        \
-    {                                                                                                          \
-        h_map_##name ret = {};                                                                                 \
-        if (!is_power_of_two(capacity))                                                                        \
-        {                                                                                                      \
-            capacity = compute_next_highest_power_of_two(capacity);                                            \
-        }                                                                                                      \
-        ret.n_buckets = capacity;                                                                              \
-        ret.buckets = (bucket_##name *)counter_malloc(sizeof(bucket_##name) * ret.n_buckets);                  \
-        memset(ret.buckets, 0, ret.n_buckets * sizeof(bucket_##name));                                         \
-        ret.hash_func = __hash_func;                                                                           \
-        ret.equal_func = __equals_func;                                                                        \
-        ret.max_psl = max_psl(ret.n_buckets);                                                                  \
-        return ret;                                                                                            \
-    }                                                                                                          \
-                                                                                                               \
-    static inline h_result swap_##name##_buckets(bucket_##name *a, bucket_##name *b)                           \
-    {                                                                                                          \
-        if (!a || !b)                                                                                          \
-        {                                                                                                      \
-            return NULL_PTR;                                                                                   \
-        }                                                                                                      \
-        bucket_##name temp = *a;                                                                               \
-        *a = *b;                                                                                               \
-        *b = temp;                                                                                             \
-        return NO_ERROR;                                                                                       \
-    }                                                                                                          \
-                                                                                                               \
-    static h_result probe_##name(h_map_##name *map,                                                            \
-                                 h_u64 hash_index,                                                             \
-                                 key_type key,                                                                 \
-                                 val_type val,                                                                 \
-                                 h_u64 *index_inserted = 0,                                                    \
-                                 h_bool *shuffled = 0,                                                         \
-                                 h_bool *grew = 0);                                                            \
-                                                                                                               \
-    static inline h_u64 compute_index_##name(h_map_##name *map, key_type *key)                                 \
-    {                                                                                                          \
-        return (map->hash_func(key) & (map->n_buckets - 1));                                                   \
-    }                                                                                                          \
-                                                                                                               \
-    static h_result grow_map_##name(h_map_##name *map)                                                         \
-    {                                                                                                          \
-        h_u32 prev_size = map->n_buckets;                                                                      \
-        if (!is_power_of_two(map->n_buckets))                                                                  \
-        {                                                                                                      \
-            map->n_buckets = compute_next_highest_power_of_two(map->n_buckets);                                \
-        }                                                                                                      \
-        else                                                                                                   \
-        {                                                                                                      \
-            map->n_buckets *= 2;                                                                               \
-        }                                                                                                      \
-        bucket_##name *old_buckets = map->buckets;                                                             \
-                                                                                                               \
-        map->buckets = (bucket_##name *)malloc(sizeof(bucket_##name) * map->n_buckets);                        \
-        memset(map->buckets, 0, map->n_buckets * sizeof(bucket_##name));                                       \
-        map->buckets_used = 0;                                                                                 \
-        for (h_u32 i = 0; i < prev_size; i++)                                                                  \
-        {                                                                                                      \
-            bucket_##name *b = &old_buckets[i];                                                                \
-            if (b->full)                                                                                       \
-            {                                                                                                  \
-                h_u64 new_hash = compute_index_##name(map, &b->key);                                           \
-                h_bool grew = false;                                                                           \
-                probe_##name(map, new_hash, b->key, b->val, 0, 0, &grew);                                      \
-            }                                                                                                  \
-        }                                                                                                      \
-        free(old_buckets);                                                                                     \
-        return NO_ERROR;                                                                                       \
-    }                                                                                                          \
-    static inline h_u32 count_full_buckets_##name(h_map_##name *map)                                           \
-    {                                                                                                          \
-        h_u32 ctr = 0;                                                                                         \
-        for (int i = 0; i < map->n_buckets; i++)                                                               \
-        {                                                                                                      \
-            if (map->buckets[i].full)                                                                          \
-            {                                                                                                  \
-                ctr++;                                                                                         \
-            }                                                                                                  \
-        }                                                                                                      \
-        return ctr;                                                                                            \
-    }                                                                                                          \
-                                                                                                               \
-    static h_result probe_##name(h_map_##name *map,                                                            \
-                                 h_u64 hash_index,                                                             \
-                                 key_type key,                                                                 \
-                                 val_type val,                                                                 \
-                                 h_u64 *index_inserted,                                                        \
-                                 h_bool *shuffled,                                                             \
-                                 h_bool *grew)                                                                 \
-    {                                                                                                          \
-        bucket_##name temp_bucket;                                                                             \
-        temp_bucket.full = 1;                                                                                  \
-        temp_bucket.psl = 0;                                                                                   \
-        temp_bucket.key = key;                                                                                 \
-        temp_bucket.val = val;                                                                                 \
-        h_u64 probe_position = hash_index;                                                                     \
-        h_result ret = UNKNOWN_ERROR;                                                                          \
-        while (temp_bucket.psl < map->max_psl && probe_position < map->n_buckets)                              \
-        {                                                                                                      \
-            bucket_##name *target_bucket = &map->buckets[probe_position];                                      \
-            if (target_bucket->full)                                                                           \
-            {                                                                                                  \
-                h_bool same_key = map->equal_func(&target_bucket->key, &temp_bucket.key);                      \
-                if (same_key == H_TRUE)                                                                        \
-                {                                                                                              \
-                    return SAME_KEY;                                                                           \
-                }                                                                                              \
-                if (target_bucket->psl < temp_bucket.psl)                                                      \
-                {                                                                                              \
-                    h_result swap_result = swap_##name##_buckets(target_bucket, &temp_bucket);                 \
-                    if (swap_result != NO_ERROR)                                                               \
-                    {                                                                                          \
-                        return swap_result;                                                                    \
-                    }                                                                                          \
-                    if (index_inserted && map->equal_func(&target_bucket->key, &key))                          \
-                    {                                                                                          \
-                        *index_inserted = probe_position;                                                      \
-                        if (shuffled)                                                                          \
-                        {                                                                                      \
-                            *shuffled = true;                                                                  \
-                        }                                                                                      \
-                    }                                                                                          \
-                }                                                                                              \
-                else                                                                                           \
-                {                                                                                              \
-                    temp_bucket.psl++;                                                                         \
-                }                                                                                              \
-            }                                                                                                  \
-            else                                                                                               \
-            {                                                                                                  \
-                memcpy(target_bucket, &temp_bucket, sizeof(temp_bucket));                                      \
-                map->buckets_used++;                                                                           \
-                if (shuffled)                                                                                  \
-                {                                                                                              \
-                    *shuffled = false;                                                                         \
-                }                                                                                              \
-                return NO_ERROR;                                                                               \
-            }                                                                                                  \
-            probe_position++;                                                                                  \
-        }                                                                                                      \
-                                                                                                               \
-        if (probe_position >= map->n_buckets || temp_bucket.psl >= map->max_psl)                               \
-        {                                                                                                      \
-            if (grew)                                                                                          \
-            {                                                                                                  \
-                *grew = true;                                                                                  \
-            }                                                                                                  \
-            grow_map_##name(map);                                                                              \
-            h_u64 target_idx = compute_index_##name(map, &temp_bucket.key);                                    \
-            h_bool grew_twice = false;                                                                         \
-            h_result res = probe_##name(map, target_idx, temp_bucket.key, temp_bucket.val, 0, 0, &grew_twice); \
-            H_ASSERT(grew_twice == false, "h_map shouldn't be growing twice");                                 \
-            return res;                                                                                        \
-        }                                                                                                      \
-        return ret;                                                                                            \
-    }                                                                                                          \
-    static h_result h_put_##name(h_map_##name *map, key_type key, val_type val)                                \
-    {                                                                                                          \
-        if (map->buckets_used >= map->n_buckets)                                                               \
-        {                                                                                                      \
-            grow_map_##name(map);                                                                              \
-            map->max_psl = max_psl(map->n_buckets);                                                            \
-        }                                                                                                      \
-        h_u64 index = compute_index_##name(map, &key);                                                         \
-        h_result probe_result = UNKNOWN_ERROR;                                                                 \
-        probe_result = probe_##name(map, index, key, val);                                                     \
-        return probe_result;                                                                                   \
-    }                                                                                                          \
-                                                                                                               \
-    static inline h_result hashmap_insert_##name(h_map_##name *map, key_type key, val_type val)                \
-    {                                                                                                          \
-        return h_put_##name(map, key, val);                                                                    \
-    }                                                                                                          \
-                                                                                                               \
-    static h_result h_retrieve_##name(h_map_##name *map, key_type key, val_type *o_val)                        \
-    {                                                                                                          \
-        h_u64 index = compute_index_##name(map, &key);                                                         \
-        h_u32 max_psl_dist = max_psl(map->n_buckets);                                                          \
-        for (h_u32 i = index; i < map->n_buckets && i < max_psl_dist + index; i++)                             \
-        {                                                                                                      \
-            bucket_##name *b = &map->buckets[i];                                                               \
-            if (b->full)                                                                                       \
-            {                                                                                                  \
-                if (b->psl > i)                                                                                \
-                {                                                                                              \
-                    o_val = NULL;                                                                              \
-                    return FOUND_HIGHER_PSL;                                                                   \
-                }                                                                                              \
-                else                                                                                           \
-                {                                                                                              \
-                    if (map->equal_func(&b->key, &key))                                                        \
-                    {                                                                                          \
-                        o_val = &b->val;                                                                       \
-                        return NO_ERROR;                                                                       \
-                    }                                                                                          \
-                }                                                                                              \
-            }                                                                                                  \
-            else                                                                                               \
-            {                                                                                                  \
-                o_val = NULL;                                                                                  \
-                return EMPTY_BUCKET;                                                                           \
-            }                                                                                                  \
-        }                                                                                                      \
-        return EXCEEDED_MAP_BOUNDS;                                                                            \
-    }                                                                                                          \
-                                                                                                               \
-    static inline h_bool h_free_##name(h_map_##name *map)                                                      \
-    {                                                                                                          \
-        if (map->buckets)                                                                                      \
-        {                                                                                                      \
-            free(map->buckets);                                                                                \
-            *map = {};                                                                                         \
-        }                                                                                                      \
-        else                                                                                                   \
-        {                                                                                                      \
-            return H_FAILURE;                                                                                  \
-        }                                                                                                      \
+#define HASHMAP_INIT(name, key_type, val_type, __hash_func, __equals_func)                      \
+    typedef HASH_FUNCTION(h_hashfunc_##name, key_type);                                         \
+    typedef HASH_EQUALS(h_equalfunc_##name, key_type);                                          \
+                                                                                                \
+    struct h_map_##name                                                                         \
+    {                                                                                           \
+        h_u32 n_buckets;                                                                        \
+        h_u32 max_psl;                                                                          \
+        h_u32 buckets_used;                                                                     \
+        h_bool *fulls;                                                                          \
+        h_u32 *psls;                                                                            \
+        key_type *keys;                                                                         \
+        val_type *vals;                                                                         \
+        h_hashfunc_##name *hash_func;                                                           \
+        h_equalfunc_##name *equal_func;                                                         \
+    };                                                                                          \
+                                                                                                \
+    static inline void allocate_and_set_buffers(h_map_##name *map)                              \
+    {                                                                                           \
+        map->fulls = (h_bool *)counter_malloc(sizeof(h_bool) * map->n_buckets);                 \
+        map->psls = (h_u32 *)counter_malloc(sizeof(h_u32) * map->n_buckets);                    \
+        map->keys = (key_type *)counter_malloc(sizeof(key_type) * map->n_buckets);              \
+        map->vals = (val_type *)counter_malloc(sizeof(val_type) * map->n_buckets);              \
+                                                                                                \
+        memset(map->fulls, 0, map->n_buckets * sizeof(h_bool));                                 \
+        memset(map->psls, 0, map->n_buckets * sizeof(h_u32));                                   \
+        memset(map->keys, 0, map->n_buckets * sizeof(key_type));                                \
+        memset(map->vals, 0, map->n_buckets * sizeof(val_type));                                \
+    }                                                                                           \
+                                                                                                \
+    static inline h_map_##name h_init_##name(h_u32 capacity = HASHMAP_INITIAL_CAPACITY)         \
+    {                                                                                           \
+        h_map_##name ret = {};                                                                  \
+        if (!is_power_of_two(capacity))                                                         \
+        {                                                                                       \
+            capacity = compute_next_highest_power_of_two(capacity);                             \
+        }                                                                                       \
+        ret.n_buckets = capacity;                                                               \
+        allocate_and_set_buffers(&ret);                                                         \
+                                                                                                \
+        ret.hash_func = __hash_func;                                                            \
+        ret.equal_func = __equals_func;                                                         \
+        ret.max_psl = max_psl(ret.n_buckets);                                                   \
+        return ret;                                                                             \
+    }                                                                                           \
+                                                                                                \
+    static inline h_result swap_##name##_buckets(h_map_##name *map, h_u32 a_id, h_u32 b_id)     \
+    {                                                                                           \
+        h_bool temp_full = map->fulls[a_id];                                                    \
+        map->fulls[a_id] = map->fulls[b_id];                                                    \
+        map->fulls[b_id] = temp_full;                                                           \
+                                                                                                \
+        h_u32 temp_psl = map->psls[a_id];                                                       \
+        map->psls[a_id] = map->psls[b_id];                                                      \
+        map->psls[b_id] = temp_psl;                                                             \
+                                                                                                \
+        key_type temp_key = map->keys[a_id];                                                    \
+        map->keys[a_id] = map->keys[b_id];                                                      \
+        map->keys[b_id] = temp_key;                                                             \
+                                                                                                \
+        val_type temp_val = map->vals[a_id];                                                    \
+        map->vals[a_id] = map->vals[b_id];                                                      \
+        map->vals[b_id] = temp_val;                                                             \
+                                                                                                \
+        return NO_ERROR;                                                                        \
+    }                                                                                           \
+                                                                                                \
+    static h_result probe_##name(h_map_##name *map,                                             \
+                                 h_u64 hash_index,                                              \
+                                 key_type key,                                                  \
+                                 val_type val,                                                  \
+                                 h_u64 *index_inserted = 0,                                     \
+                                 h_bool *shuffled = 0,                                          \
+                                 h_bool *grew = 0);                                             \
+                                                                                                \
+    static inline h_u64 compute_index_##name(h_map_##name *map, key_type *key)                  \
+    {                                                                                           \
+        return (map->hash_func(key) & (map->n_buckets - 1));                                    \
+    }                                                                                           \
+                                                                                                \
+    static h_result grow_map_##name(h_map_##name *map)                                          \
+    {                                                                                           \
+        h_u32 prev_size = map->n_buckets;                                                       \
+        if (!is_power_of_two(map->n_buckets))                                                   \
+        {                                                                                       \
+            map->n_buckets = compute_next_highest_power_of_two(map->n_buckets);                 \
+        }                                                                                       \
+        else                                                                                    \
+        {                                                                                       \
+            map->n_buckets *= 2;                                                                \
+        }                                                                                       \
+        h_bool *old_fulls = map->fulls;                                                         \
+        key_type *old_keys = map->keys;                                                         \
+        val_type *old_vals = map->vals;                                                         \
+                                                                                                \
+        allocate_and_set_buffers(map);                                                          \
+        map->buckets_used = 0;                                                                  \
+        for (h_u32 i = 0; i < prev_size; i++)                                                   \
+        {                                                                                       \
+            if (old_fulls[i])                                                                   \
+            {                                                                                   \
+                h_u64 new_hash = compute_index_##name(map, &old_keys[i]);                       \
+                h_bool grew = false;                                                            \
+                probe_##name(map, new_hash, old_keys[i], old_vals[i], 0, 0, 0);                 \
+            }                                                                                   \
+        }                                                                                       \
+        free(old_fulls);                                                                        \
+        free(old_keys);                                                                         \
+        free(old_vals);                                                                         \
+        return NO_ERROR;                                                                        \
+    }                                                                                           \
+                                                                                                \
+    static h_result probe_##name(h_map_##name *map,                                             \
+                                 h_u64 hash_index,                                              \
+                                 key_type key,                                                  \
+                                 val_type val,                                                  \
+                                 h_u64 *index_inserted,                                         \
+                                 h_bool *shuffled,                                              \
+                                 h_bool *grew)                                                  \
+    {                                                                                           \
+        h_u64 probe_position = hash_index;                                                      \
+        h_result ret = UNKNOWN_ERROR;                                                           \
+        h_u32 psl_curr = 0;                                                                     \
+        while (psl_curr < map->max_psl && probe_position < map->n_buckets)                      \
+        {                                                                                       \
+            if (map->fulls[probe_position])                                                     \
+            {                                                                                   \
+                h_bool same_key = map->equal_func(&map->keys[probe_position], &key);            \
+                if (same_key == H_TRUE)                                                         \
+                {                                                                               \
+                    return SAME_KEY;                                                            \
+                }                                                                               \
+                if (map->psls[probe_position] < psl_curr)                                       \
+                {                                                                               \
+                    h_u32 temp_psl = psl_curr;                                                  \
+                    psl_curr = map->psls[probe_position];                                       \
+                    map->psls[probe_position] = temp_psl;                                       \
+                                                                                                \
+                    key_type temp_key = key;                                                    \
+                    key = map->keys[probe_position];                                            \
+                    map->keys[probe_position] = key;                                            \
+                                                                                                \
+                    val_type temp_val = val;                                                    \
+                    val = map->vals[probe_position];                                            \
+                    map->vals[probe_position] = temp_val;                                       \
+                }                                                                               \
+                else                                                                            \
+                {                                                                               \
+                    psl_curr++;                                                                 \
+                }                                                                               \
+            }                                                                                   \
+            else                                                                                \
+            {                                                                                   \
+                map->fulls[probe_position] = 1;                                                 \
+                map->psls[probe_position] = psl_curr;                                           \
+                map->keys[probe_position] = key;                                                \
+                map->vals[probe_position] = val;                                                \
+                map->buckets_used++;                                                            \
+                if (shuffled)                                                                   \
+                {                                                                               \
+                    *shuffled = false;                                                          \
+                }                                                                               \
+                return NO_ERROR;                                                                \
+            }                                                                                   \
+            probe_position++;                                                                   \
+        }                                                                                       \
+                                                                                                \
+        if (probe_position >= map->n_buckets || psl_curr >= map->max_psl)                       \
+        {                                                                                       \
+            if (grew)                                                                           \
+            {                                                                                   \
+                *grew = true;                                                                   \
+            }                                                                                   \
+            grow_map_##name(map);                                                               \
+            h_u64 target_idx = compute_index_##name(map, &key);                                 \
+            h_bool grew_twice = false;                                                          \
+            h_result res = probe_##name(map, target_idx, key, val, 0, 0, &grew_twice);          \
+            H_ASSERT(grew_twice == false, "h_map shouldn't be growing twice");                  \
+            return res;                                                                         \
+        }                                                                                       \
+        return ret;                                                                             \
+    }                                                                                           \
+    static h_result h_put_##name(h_map_##name *map, key_type key, val_type val)                 \
+    {                                                                                           \
+        if (map->buckets_used >= map->n_buckets)                                                \
+        {                                                                                       \
+            grow_map_##name(map);                                                               \
+            map->max_psl = max_psl(map->n_buckets);                                             \
+        }                                                                                       \
+        h_u64 index = compute_index_##name(map, &key);                                          \
+        h_result probe_result = UNKNOWN_ERROR;                                                  \
+        probe_result = probe_##name(map, index, key, val);                                      \
+        return probe_result;                                                                    \
+    }                                                                                           \
+                                                                                                \
+    static inline h_result hashmap_insert_##name(h_map_##name *map, key_type key, val_type val) \
+    {                                                                                           \
+        return h_put_##name(map, key, val);                                                     \
+    }                                                                                           \
+                                                                                                \
+    static h_result h_retrieve_##name(h_map_##name *map, key_type key, val_type *o_val)         \
+    {                                                                                           \
+        h_u64 index = compute_index_##name(map, &key);                                          \
+        h_u32 max_psl_dist = max_psl(map->n_buckets);                                           \
+        for (h_u32 i = index; i < map->n_buckets && i < max_psl_dist + index; i++)              \
+        {                                                                                       \
+            if (map->fulls[i])                                                                  \
+            {                                                                                   \
+                if (map->psls[i] > i)                                                           \
+                {                                                                               \
+                    o_val = NULL;                                                               \
+                    return FOUND_HIGHER_PSL;                                                    \
+                }                                                                               \
+                else                                                                            \
+                {                                                                               \
+                    if (map->equal_func(&map->keys[i], &key))                                   \
+                    {                                                                           \
+                        o_val = &map->vals[i];                                                  \
+                        return NO_ERROR;                                                        \
+                    }                                                                           \
+                }                                                                               \
+            }                                                                                   \
+            else                                                                                \
+            {                                                                                   \
+                o_val = NULL;                                                                   \
+                return EMPTY_BUCKET;                                                            \
+            }                                                                                   \
+        }                                                                                       \
+        return EXCEEDED_MAP_BOUNDS;                                                             \
+    }                                                                                           \
+                                                                                                \
+    static inline h_bool h_free_##name(h_map_##name *map)                                       \
+    {                                                                                           \
+        if (map->fulls)                                                                         \
+        {                                                                                       \
+            free(map->fulls);                                                                   \
+            free(map->psls);                                                                    \
+            free(map->keys);                                                                    \
+            free(map->vals);                                                                    \
+        }                                                                                       \
+        else                                                                                    \
+        {                                                                                       \
+            return H_FAILURE;                                                                   \
+        }                                                                                       \
+        return H_SUCCESS;                                                                       \
     }
 
 #endif
